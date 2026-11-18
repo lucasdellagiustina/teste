@@ -59,6 +59,20 @@
   .ctl.hang{background:var(--danger);color:#fff}
   #toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#000d;padding:10px 18px;border-radius:10px;font-size:14px;opacity:0;pointer-events:none;transition:.3s;max-width:90%;text-align:center}
   #toast.show{opacity:1}
+  .opt{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+  .opt input{accent-color:var(--accent);width:16px;height:16px}
+  .vol{position:absolute;top:10px;right:10px;background:#000a;padding:6px 12px;border-radius:20px;font-size:13px;display:flex;align-items:center;gap:8px}
+  .vol input{width:90px;accent-color:var(--accent)}
+  .opt select{background:var(--panel2);color:var(--text);border:1px solid #ffffff14;border-radius:8px;padding:6px 8px;font-size:13px;outline:none}
+  #volPanel{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid #ffffff18;border-radius:var(--radius);padding:16px 18px;width:min(340px,92vw);box-shadow:0 10px 40px #000a;display:none;z-index:10}
+  #volPanel.open{display:block}
+  #volPanel h3{font-size:14px;margin-bottom:12px}
+  .vrow{margin-bottom:14px}
+  .vrow:last-child{margin-bottom:0}
+  .vrow label{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-bottom:6px}
+  .vrow label b{color:var(--text);font-weight:600}
+  .vrow input[type=range]{width:100%;accent-color:var(--accent)}
+  .vrow small{display:block;color:var(--muted);font-size:11px;margin-top:4px;line-height:1.4}
   @media(max-width:700px){
     #stage.has-screen{grid-template-columns:1fr;grid-template-rows:2fr 1fr 1fr}
     #stage.has-screen .tile.screen{grid-column:1;grid-row:1}
@@ -78,6 +92,7 @@
     <div class="card">
       <h2>Chamada de vídeo e tela</h2>
       <p>Crie uma sala e envie o link, ou entre em uma sala existente com o código. Tudo roda direto no navegador, ponto a ponto.</p>
+      <input type="text" id="userName" placeholder="Seu nome" maxlength="24" autocomplete="nickname" style="width:100%;margin-bottom:14px">
       <button class="btn" id="btnCreate">Criar nova sala</button>
       <div class="divider">ou entre em uma sala</div>
       <div class="row">
@@ -97,12 +112,13 @@
     <div id="stage">
       <div class="tile screen hidden" id="tileRemoteScreen">
         <video id="remoteScreen" autoplay playsinline></video>
-        <div class="label">Tela do outro participante</div>
+        <div class="label" id="remoteScreenLabel">Tela do participante</div>
+        <div class="vol">🔊 <input type="range" id="screenVol" min="0" max="100" value="100" title="Volume do áudio da tela"></div>
       </div>
       <div class="tile" id="tileRemote">
         <video id="remoteCam" autoplay playsinline></video>
         <div class="wait" id="waitMsg">Aguardando alguém entrar na sala…</div>
-        <div class="label">Participante</div>
+        <div class="label" id="remoteName">Participante</div>
       </div>
       <div class="tile screen hidden" id="tileLocalScreen">
         <video id="localScreen" autoplay playsinline muted></video>
@@ -110,17 +126,44 @@
       </div>
       <div class="tile" id="tileLocal">
         <video id="localCam" autoplay playsinline muted style="transform:scaleX(-1)"></video>
-        <div class="label">Você</div>
+        <div class="label" id="localName">Você</div>
       </div>
     </div>
     <div id="controls">
       <button class="ctl" id="btnMic">🎤 Microfone</button>
       <button class="ctl" id="btnCam">📷 Câmera</button>
       <button class="ctl" id="btnScreen">🖥️ Compartilhar tela</button>
+      <button class="ctl" id="btnVol">🔊 Volume</button>
+      <label class="opt"><input type="checkbox" id="optScreenAudio" checked> Incluir áudio da tela</label>
+      <label class="opt"><input type="checkbox" id="optDuck" checked> Priorizar voz</label>
+      <label class="opt">Qualidade da tela
+        <select id="optQuality">
+          <option value="fluid" selected>Fluidez – jogos (720p · 60fps)</option>
+          <option value="balanced">Equilibrado (1080p · 30fps)</option>
+          <option value="sharp">Nitidez – texto/slides (1080p · 15fps)</option>
+          <option value="saver">Economia – internet fraca (540p · 30fps)</option>
+        </select>
+      </label>
       <button class="ctl hang" id="btnHang">📞 Sair</button>
     </div>
   </section>
 </main>
+<div id="volPanel">
+  <h3>Ajustes de volume</h3>
+  <div class="vrow">
+    <label>Voz do participante <b id="vVoiceTxt">100%</b></label>
+    <input type="range" id="volVoice" min="0" max="100" value="100">
+  </div>
+  <div class="vrow">
+    <label>Som da tela que você assiste <b id="vInTxt">100%</b></label>
+    <input type="range" id="volScreenIn" min="0" max="100" value="100">
+  </div>
+  <div class="vrow">
+    <label>Som da tela que você transmite <b id="vOutTxt">60%</b></label>
+    <input type="range" id="volScreenOut" min="0" max="100" value="60">
+    <small>Controla o quanto de som da sua tela o outro participante ouve. Vale na hora, mesmo durante a transmissão.</small>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -130,6 +173,18 @@
   let peer = null, localStream = null, screenStream = null;
   let camCall = null, screenOutCall = null, screenInCall = null;
   let remoteId = null, isHost = false;
+  let myName = "Convidado", remoteName = "Participante";
+  let audioCtx = null, duckTimer = null, duckNodes = [], screenAudioNodes = [];
+  let userScreenVol = 1;          // volume da tela escolhido por quem assiste
+  let screenOutVol = 0.6;         // volume do áudio da tela que você transmite (ajustável ao vivo)
+  let screenGainNode = null;
+  // Presets de qualidade da transmissão de tela
+  const QUALITY = {
+    fluid:    { w:1280, h:720,  fps:60, kbps:4000, hint:"motion", deg:"maintain-framerate" },
+    balanced: { w:1920, h:1080, fps:30, kbps:4500, hint:"motion", deg:"maintain-framerate" },
+    sharp:    { w:1920, h:1080, fps:15, kbps:3000, hint:"detail", deg:"maintain-resolution" },
+    saver:    { w:960,  h:540,  fps:30, kbps:1200, hint:"motion", deg:"maintain-framerate" }
+  };
 
   /* ---------- Utilidades ---------- */
   function toast(msg, ms = 3500){
@@ -188,6 +243,10 @@
   }
 
   function bindPeerEvents(){
+    // Recebe o nome do anfitrião (enviado por conexão de dados)
+    peer.on("connection", conn => {
+      conn.on("data", d => { if (d && d.type === "name") setRemoteName(d.name); });
+    });
     peer.on("call", call => {
       const type = call.metadata && call.metadata.type;
       remoteId = call.peer;
@@ -196,6 +255,7 @@
         screenInCall = call;
         call.on("stream", stream => {
           $("remoteScreen").srcObject = stream;
+          applyScreenVolume(userScreenVol);
           $("tileRemoteScreen").classList.remove("hidden");
           updateLayout();
         });
@@ -204,6 +264,9 @@
       } else {
         call.answer(localStream);
         attachCamCall(call);
+        if (call.metadata && call.metadata.name) setRemoteName(call.metadata.name);
+        const conn = peer.connect(call.peer);
+        conn.on("open", () => conn.send({ type: "name", name: myName }));
       }
     });
   }
@@ -212,6 +275,7 @@
     camCall = call;
     call.on("stream", stream => {
       $("remoteCam").srcObject = stream;
+      startDucking(stream);
       $("waitMsg").style.display = "none";
       setStatus("Em chamada", true);
       toast("Participante conectado!");
@@ -229,19 +293,73 @@
   function onRemoteLeft(){
     $("remoteCam").srcObject = null;
     $("waitMsg").style.display = "flex";
-    $("waitMsg").textContent = "O participante saiu da chamada.";
+    $("waitMsg").textContent = remoteName + " saiu da chamada.";
+    stopDucking();
+    setRemoteName("");
     clearRemoteScreen();
     if (screenStream) stopScreenShare();
     camCall = null; remoteId = null;
     setStatus(isHost ? "Sala aberta" : "Chamada encerrada", isHost);
   }
 
+  /* ---------- Nome ---------- */
+  function cleanName(n){ return (n || "").trim().slice(0, 24); }
+  function setRemoteName(n){
+    remoteName = cleanName(n) || "Participante";
+    $("remoteName").textContent = remoteName;
+    $("remoteScreenLabel").textContent = "Tela de " + remoteName;
+  }
+
+  /* ---------- Áudio: ganho e "priorizar voz" ---------- */
+  function getCtx(){
+    if (!audioCtx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  }
+  function applyScreenVolume(v){
+    $("remoteScreen").volume = Math.max(0, Math.min(1, v));
+  }
+  // Abaixa automaticamente o áudio da tela enquanto o outro participante fala
+  function startDucking(stream){
+    stopDucking();
+    if (!stream.getAudioTracks().length) return;
+    const ctx = getCtx();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an); // sem conectar ao destino: a voz já toca pelo <video>
+    const buf = new Uint8Array(an.fftSize);
+    let current = userScreenVol;
+    duckTimer = setInterval(() => {
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++){ const x = (buf[i] - 128) / 128; sum += x * x; }
+      const speaking = Math.sqrt(sum / buf.length) > 0.02;
+      const target = ($("optDuck").checked && speaking) ? userScreenVol * 0.2 : userScreenVol;
+      current += (target - current) * (target < current ? 0.5 : 0.15); // abaixa rápido, volta devagar
+      applyScreenVolume(current);
+    }, 80);
+    duckNodes = [src, an];
+  }
+  function stopDucking(){
+    clearInterval(duckTimer); duckTimer = null;
+    duckNodes.forEach(n => { try { n.disconnect(); } catch(e){} });
+    duckNodes = [];
+  }
+
   /* ---------- Criar / Entrar ---------- */
   async function startAs(host, targetId){
+    myName = cleanName($("userName").value) || "Convidado";
+    try { localStorage.setItem("meetlite-name", myName); } catch(e){}
+    getCtx(); // criado aqui, durante o clique, para o navegador permitir o áudio
     try {
       localStream = await getLocalMedia();
     } catch (e) { toast(e.message, 6000); return; }
     $("localCam").srcObject = localStream;
+    $("localName").textContent = myName + " (você)";
     syncButtons();
     showCall();
     isHost = host;
@@ -264,7 +382,7 @@
       } else {
         peer = await createPeer();
         bindPeerEvents();
-        const call = peer.call(PREFIX + targetId, localStream, { metadata: { type: "cam" } });
+        const call = peer.call(PREFIX + targetId, localStream, { metadata: { type: "cam", name: myName } });
         if (!call){ toast("Falha ao iniciar a chamada."); return leave(); }
         remoteId = PREFIX + targetId;
         $("waitMsg").textContent = "Conectando à sala…";
@@ -303,19 +421,68 @@
     if (!remoteId) return toast("Aguarde alguém entrar na sala para compartilhar.");
     if (!navigator.mediaDevices.getDisplayMedia) return toast("Seu navegador não suporta compartilhar tela.");
     try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: (q => ({ width:{ideal:q.w}, height:{ideal:q.h}, frameRate:{ideal:q.fps} }))(QUALITY[$("optQuality").value]),
+        audio: $("optScreenAudio").checked
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : false
+      });
     } catch (e){ return; } // usuário cancelou
+
+    // Reduz o volume do áudio da tela na origem para não encobrir a voz
+    let outStream = screenStream;
+    const audioTracks = screenStream.getAudioTracks();
+    if (audioTracks.length){
+      const ctx = getCtx();
+      const src = ctx.createMediaStreamSource(new MediaStream(audioTracks));
+      const gain = ctx.createGain();
+      gain.gain.value = screenOutVol; screenGainNode = gain;
+      const dest = ctx.createMediaStreamDestination();
+      src.connect(gain); gain.connect(dest);
+      outStream = new MediaStream([...screenStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+      screenAudioNodes = [src, gain];
+      toast("Dica: use fones de ouvido para o som da tela não voltar pelo seu microfone.", 5000);
+    } else if ($("optScreenAudio").checked){
+      toast("Sem áudio: marque \"Compartilhar áudio\" na janela de seleção (funciona melhor ao compartilhar uma aba).", 6000);
+    }
     $("localScreen").srcObject = screenStream;
     $("tileLocalScreen").classList.remove("hidden");
     updateLayout();
-    screenOutCall = peer.call(remoteId, screenStream, { metadata: { type: "screen" } });
+    screenOutCall = peer.call(remoteId, outStream, { metadata: { type: "screen" } });
     screenStream.getVideoTracks()[0].addEventListener("ended", stopScreenShare);
+    applyScreenQuality();
     $("btnScreen").classList.add("active");
     $("btnScreen").textContent = "⏹️ Parar compartilhamento";
+  }
+  // Aplica resolução/FPS na captura e limita taxa de bits/FPS no envio (também ao vivo)
+  async function applyScreenQuality(){
+    const q = QUALITY[$("optQuality").value];
+    if (!screenStream || !q) return;
+    const track = screenStream.getVideoTracks()[0];
+    try { track.contentHint = q.hint; } catch(e){}
+    try { await track.applyConstraints({ width:{ideal:q.w}, height:{ideal:q.h}, frameRate:{ideal:q.fps} }); } catch(e){}
+    for (let i = 0; i < 20; i++){
+      const pc = screenOutCall && screenOutCall.peerConnection;
+      const sender = pc && pc.getSenders().find(x => x.track && x.track.kind === "video");
+      if (sender){
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+          params.encodings[0].maxBitrate = q.kbps * 1000;
+          params.encodings[0].maxFramerate = q.fps;
+          params.degradationPreference = q.deg;
+          await sender.setParameters(params);
+        } catch(e){ console.warn("setParameters:", e); }
+        return;
+      }
+      await new Promise(r => setTimeout(r, 250));
+    }
   }
   function stopScreenShare(){
     if (screenStream){ screenStream.getTracks().forEach(t => t.stop()); screenStream = null; }
     if (screenOutCall){ try { screenOutCall.close(); } catch(e){} screenOutCall = null; }
+    screenAudioNodes.forEach(n => { try { n.disconnect(); } catch(e){} });
+    screenAudioNodes = []; screenGainNode = null;
     $("localScreen").srcObject = null;
     $("tileLocalScreen").classList.add("hidden");
     updateLayout();
@@ -327,6 +494,8 @@
   function leave(){
     stopScreenShare();
     [camCall, screenInCall].forEach(c => { try { c && c.close(); } catch(e){} });
+    stopDucking();
+    setRemoteName("");
     if (peer){ try { peer.destroy(); } catch(e){} }
     if (localStream) localStream.getTracks().forEach(t => t.stop());
     peer = localStream = camCall = screenInCall = remoteId = null;
@@ -356,7 +525,34 @@
     catch(e){ toast("Selecione e copie o link manualmente."); }
   };
 
-  // Entrar automaticamente se abrir um link com #codigo
+  function pct(v){ return Math.round(v) + "%"; }
+  function setScreenIn(v){
+    userScreenVol = v / 100;
+    applyScreenVolume(userScreenVol);
+    $("screenVol").value = v; $("volScreenIn").value = v; $("vInTxt").textContent = pct(v);
+  }
+  $("screenVol").addEventListener("input", e => setScreenIn(+e.target.value));
+  $("volScreenIn").addEventListener("input", e => setScreenIn(+e.target.value));
+  $("volVoice").addEventListener("input", e => {
+    $("remoteCam").volume = e.target.value / 100;
+    $("vVoiceTxt").textContent = pct(e.target.value);
+  });
+  $("volScreenOut").addEventListener("input", e => {
+    screenOutVol = e.target.value / 100;
+    if (screenGainNode) screenGainNode.gain.value = screenOutVol;
+    $("vOutTxt").textContent = pct(e.target.value);
+  });
+  $("optQuality").addEventListener("change", () => { applyScreenQuality(); if (screenStream) toast("Qualidade atualizada."); });
+  $("btnVol").onclick = e => { e.stopPropagation(); $("volPanel").classList.toggle("open"); };
+  document.addEventListener("click", e => {
+    if (!$("volPanel").contains(e.target) && e.target !== $("btnVol")) $("volPanel").classList.remove("open");
+  });
+  try { $("userName").value = localStorage.getItem("meetlite-name") || ""; } catch(e){}
+  $("userName").addEventListener("keydown", e => {
+    if (e.key === "Enter") ($("joinId").value.trim() ? join() : $("btnCreate").click());
+  });
+
+  // Se abrir um link com #codigo, o código já vem preenchido
   const hash = location.hash.replace("#", "");
   if (hash){ $("joinId").value = hash; }
 })();
