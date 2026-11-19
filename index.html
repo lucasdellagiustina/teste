@@ -168,6 +168,7 @@
       <button class="ctl" id="btnVol">🔊 Volume</button>
       <label class="opt"><input type="checkbox" id="optScreenAudio" checked> Incluir áudio da tela</label>
       <label class="opt"><input type="checkbox" id="optDuck" checked> Priorizar voz</label>
+      <label class="opt" title="Abaixa o som da tela que você transmite enquanto o participante fala, para a voz dele não voltar como eco"><input type="checkbox" id="optEcho" checked> Evitar eco da voz</label>
       <label class="opt">Qualidade da tela
         <select id="optQuality">
           <option value="fluid" selected>Fluidez – jogos (720p · 60fps)</option>
@@ -237,6 +238,7 @@
   const AV_RE = /^data:image\/png;base64,[A-Za-z0-9+/=]{20,6000}$/;
   let myAvatar = null, remoteAvatar = null, remoteCamOn = true, dataConn = null;
   try { const a = localStorage.getItem("meetlite-avatar"); if (a && AV_RE.test(a)) myAvatar = a; } catch(e){}
+  let lastRemoteSpeech = 0;       // última vez que o outro participante falou (anti-eco)
   // Presets de qualidade da transmissão de tela
   const QUALITY = {
     fluid:    { w:1280, h:720,  fps:60, kbps:4000, hint:"motion", deg:"maintain-framerate" },
@@ -396,10 +398,19 @@
       an.getByteTimeDomainData(buf);
       let sum = 0;
       for (let i = 0; i < buf.length; i++){ const x = (buf[i] - 128) / 128; sum += x * x; }
-      const speaking = Math.sqrt(sum / buf.length) > 0.02;
+      const rms = Math.sqrt(sum / buf.length);
+      const speaking = rms > 0.02;
+      if (rms > 0.01) lastRemoteSpeech = performance.now(); // limiar mais baixo p/ eco: pega voz baixa
       const target = ($("optDuck").checked && speaking) ? userScreenVol * 0.2 : userScreenVol;
       current += (target - current) * (target < current ? 0.5 : 0.15); // abaixa rápido, volta devagar
       applyScreenVolume(current);
+      // Eco: o som do sistema inclui a voz do participante; abaixa o áudio transmitido enquanto ele fala
+      if (screenGainNode && audioCtx){
+        // segura o abafamento ~0,6 s após a fala: a voz ainda toca nas caixas (atraso do buffer) e seria capturada
+        const gated = $("optEcho").checked && (performance.now() - lastRemoteSpeech < 600);
+        const g = gated ? screenOutVol * 0.03 : screenOutVol;
+        screenGainNode.gain.setTargetAtTime(g, audioCtx.currentTime, gated ? 0.015 : 0.3);
+      }
     }, 80);
     duckNodes = [src, an];
   }
@@ -530,14 +541,22 @@
   async function startScreenShare(){
     if (!remoteId) return toast("Aguarde alguém entrar na sala para compartilhar.");
     if (!navigator.mediaDevices.getDisplayMedia) return toast("Seu navegador não suporta compartilhar tela.");
+    const dmOpts = {
+      video: (q => ({ width:{ideal:q.w}, height:{ideal:q.h}, frameRate:{ideal:q.fps} }))(QUALITY[$("optQuality").value]),
+      audio: $("optScreenAudio").checked
+        ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, restrictOwnAudio: true }
+        : false,
+      // Chrome: captura só o áudio da janela escolhida e esconde a própria aba da lista (evita eco)
+      systemAudio: "include", windowAudio: "window", selfBrowserSurface: "exclude"
+    };
     try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: (q => ({ width:{ideal:q.w}, height:{ideal:q.h}, frameRate:{ideal:q.fps} }))(QUALITY[$("optQuality").value]),
-        audio: $("optScreenAudio").checked
-          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-          : false
-      });
-    } catch (e){ return; } // usuário cancelou
+      screenStream = await navigator.mediaDevices.getDisplayMedia(dmOpts);
+    } catch (e){
+      if (e && e.name === "TypeError"){   // navegador não aceita as opções extras
+        try { screenStream = await navigator.mediaDevices.getDisplayMedia({ video: dmOpts.video, audio: dmOpts.audio }); }
+        catch (e2){ return; }
+      } else return; // usuário cancelou
+    }
 
     // Reduz o volume do áudio da tela na origem para não encobrir a voz
     let outStream = screenStream;
@@ -551,7 +570,9 @@
       src.connect(gain); gain.connect(dest);
       outStream = new MediaStream([...screenStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
       screenAudioNodes = [src, gain];
-      toast("Dica: use fones de ouvido para o som da tela não voltar pelo seu microfone.", 5000);
+      const surf = (screenStream.getVideoTracks()[0].getSettings() || {}).displaySurface;
+      if (surf === "monitor") toast("Tela inteira inclui o som da chamada: a voz do outro pode voltar como eco. Prefira compartilhar só a janela do jogo.", 8000);
+      else toast("Dica: use fones de ouvido para o som da tela não voltar pelo seu microfone.", 5000);
     } else if ($("optScreenAudio").checked){
       toast("Sem áudio: marque \"Compartilhar áudio\" na janela de seleção (funciona melhor ao compartilhar uma aba).", 6000);
     }
