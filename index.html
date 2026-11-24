@@ -168,7 +168,7 @@
       <button class="ctl" id="btnVol">🔊 Volume</button>
       <label class="opt"><input type="checkbox" id="optScreenAudio" checked> Incluir áudio da tela</label>
       <label class="opt"><input type="checkbox" id="optDuck" checked> Priorizar voz</label>
-      <label class="opt" title="Abaixa o som da tela que você transmite enquanto o participante fala, para a voz dele não voltar como eco"><input type="checkbox" id="optEcho" checked> Evitar eco da voz</label>
+      <label class="opt" title="Só ative se a voz do outro estiver voltando como eco no som da tela"><input type="checkbox" id="optEcho"> Evitar eco da voz</label>
       <label class="opt">Qualidade da tela
         <select id="optQuality">
           <option value="fluid" selected>Fluidez – jogos (720p · 60fps)</option>
@@ -400,16 +400,16 @@
       for (let i = 0; i < buf.length; i++){ const x = (buf[i] - 128) / 128; sum += x * x; }
       const rms = Math.sqrt(sum / buf.length);
       const speaking = rms > 0.02;
-      if (rms > 0.01) lastRemoteSpeech = performance.now(); // limiar mais baixo p/ eco: pega voz baixa
+      if (rms > 0.03) lastRemoteSpeech = performance.now(); // limiar mais baixo p/ eco: pega voz baixa
       const target = ($("optDuck").checked && speaking) ? userScreenVol * 0.2 : userScreenVol;
       current += (target - current) * (target < current ? 0.5 : 0.15); // abaixa rápido, volta devagar
       applyScreenVolume(current);
       // Eco: o som do sistema inclui a voz do participante; abaixa o áudio transmitido enquanto ele fala
       if (screenGainNode && audioCtx){
         // segura o abafamento ~0,6 s após a fala: a voz ainda toca nas caixas (atraso do buffer) e seria capturada
-        const gated = $("optEcho").checked && (performance.now() - lastRemoteSpeech < 600);
-        const g = gated ? screenOutVol * 0.03 : screenOutVol;
-        screenGainNode.gain.setTargetAtTime(g, audioCtx.currentTime, gated ? 0.015 : 0.3);
+        const gated = $("optEcho").checked && (performance.now() - lastRemoteSpeech < 250);
+        const g = gated ? screenOutVol * 0.4 : screenOutVol;
+        screenGainNode.gain.setTargetAtTime(g, audioCtx.currentTime, gated ? 0.05 : 0.2);
       }
     }, 80);
     duckNodes = [src, an];
